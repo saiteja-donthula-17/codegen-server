@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -35,7 +36,17 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
 
 {given}"""
 
-    text = client.models.generate_content(model=os.getenv('GEMINI_MODEL'), contents=prompt).text
+    text = None
+    for attempt in range(3):  # Gemini is often briefly overloaded (503)
+        try:
+            text = client.models.generate_content(model=os.getenv('GEMINI_MODEL'), contents=prompt).text
+        except Exception as e:
+            print('gemini failed:', e)
+        if text:
+            break
+        time.sleep(10)
+    if not text:
+        raise HTTPException(503, 'Gemini busy, run again in a minute')
 
     result = {}
     for chunk in text.split('FILE: ')[1:]:

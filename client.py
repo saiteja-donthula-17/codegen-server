@@ -24,7 +24,12 @@ for round in range(3):
     send = {n: Path(n).read_text() for n in NAMES if Path(n).exists()}
     send['errors'] = errors[-8000:]
     req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers={'Content-Type': 'application/json'})
-    for name, code in json.load(urllib.request.urlopen(req, timeout=600)).items():
+    try:
+        result = json.load(urllib.request.urlopen(req, timeout=600))
+    except urllib.error.HTTPError as e:
+        print('server error', e.code, '- run the command again in a minute')
+        break
+    for name, code in result.items():
         Path(name).write_text(code)
         print('wrote', name)
 else:
