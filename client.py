@@ -11,8 +11,18 @@ FILES = __FILES__
 # find tests.py and the data folder whether they sit here or one level up
 TESTS = next((p for p in ['pytest/tests.py', '../pytest/tests.py', 'tests.py', '../tests.py'] if Path(p).exists()),
              'pytest/tests.py')
-DATA = [str(p) for d in ['data', '../data'] for p in sorted(Path(d).glob('*.*')) if p.suffix in ('.csv', '.json')]
-print('tests file:', TESTS, '| data files:', len(DATA))
+DATA = [p for d in ['data', '../data'] for p in sorted(Path(d).rglob('*'))
+        if p.is_file() and not p.name.startswith('.')][:40]
+if not Path(TESTS).exists():
+    sys.exit('tests.py not found - run this from the project folder (next to pytest/ or one level below it)')
+
+
+def read(path, limit=None):
+    """Text of a file, or None if it is missing or binary."""
+    try:
+        return Path(path).read_text(encoding='utf-8')[:limit]
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def run_tests():
@@ -23,11 +33,21 @@ def run_tests():
     return r.returncode == 0, out
 
 
+send = {}
+for n in [TESTS] + FILES:
+    send[n] = read(n)
+for p in DATA:
+    send[str(p)] = read(p, 3000)  # data is only a sample so Gemini sees paths and fields
+send = {n: text for n, text in send.items() if text is not None}
+print('tests file:', TESTS, '| data files:', sum(str(p) in send for p in DATA))
+
 for round in range(3):
     ok, errors = run_tests()
     if ok:
         break
-    send = {n: Path(n).read_text() for n in [TESTS] + FILES + DATA if Path(n).exists()}
+    for n in FILES:
+        if read(n) is not None:
+            send[n] = read(n)
     send['errors'] = errors[-8000:]
     req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers={'Content-Type': 'application/json'})
     try:
