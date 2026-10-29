@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -42,22 +43,31 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
 {given}"""
 
     text = None
-    for attempt in range(3):  # Gemini is often briefly overloaded (503)
+    for attempt in range(3):  # Gemini is often briefly overloaded (503) or rate limited (429)
         try:
             text = client.models.generate_content(model=model, contents=prompt).text
-        except errors.ClientError as e:  # bad key, unknown model, quota - retrying won't help
-            raise HTTPException(e.code, f'Gemini: {e.message}')
+        except errors.ClientError as e:
+            if e.code != 429:  # bad key, unknown model - retrying won't help
+                raise HTTPException(e.code, f'Gemini: {e.message}')
+            print('gemini rate limited:', e.message)
         except Exception as e:
             print('gemini failed:', e)
         if text:
             break
-        time.sleep(10)
+        if attempt < 2:
+            time.sleep(10)
     if not text:
-        raise HTTPException(503, 'Gemini busy, run again in a minute')
+        raise HTTPException(503, 'Gemini busy or rate limited, run again in a minute')
 
+    # split on "FILE: name.py" lines -> [before, name, code, name, code, ...]
+    parts = re.split(r'^\W*FILE:\W*(\S+?)\W*$', text, flags=re.M)
     result = {}
-    for chunk in text.split('FILE: ')[1:]:
-        name, code = chunk.split('\n', 1)
-        if name.strip() in FILES:
-            result[name.strip()] = code
+    for name, code in zip(parts[1::2], parts[2::2]):
+        lines = code.strip().splitlines()
+        if lines and lines[0].startswith('```'):  # Gemini adds fences despite the prompt
+            lines = lines[1:]
+        if lines and lines[-1].startswith('```'):
+            lines = lines[:-1]
+        if name in FILES and lines:  # an empty block must not wipe the user's file
+            result[name] = '\n'.join(lines) + '\n'
     return result

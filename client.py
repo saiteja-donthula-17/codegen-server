@@ -75,8 +75,11 @@ for round in range(3):
             detail = 'run the command again in a minute'
         print('server error', e.code, '-', detail)
         break
+    except (urllib.error.URLError, TimeoutError) as e:  # no network, DNS, or the server took too long
+        print('could not reach server -', e, '- run the command again in a minute')
+        break
     for name, code in result.items():
-        Path(name).write_text(code)
+        Path(name).write_text(code, encoding='utf-8')
         print('wrote', name)
 else:
     run_tests()
