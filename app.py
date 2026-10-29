@@ -42,26 +42,40 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
 
 {given}"""
 
-    text = None
-    for attempt in range(3):  # Gemini is often briefly overloaded (503) or rate limited (429)
+    result = {}
+    for attempt in range(2):  # a reply cut off mid-file is asked for once more
+        files = split_files(ask_gemini(client, model, prompt))
+        good = {name: code for name, code in files.items() if compiles(name, code)}
+        result.update(good)
+        if len(good) == len(files):
+            break
+    return result  # only files that compile, so a broken reply never overwrites working code
+
+
+def ask_gemini(client, model, prompt):
+    """Gemini's reply, retrying when it is briefly overloaded (503) or rate limited (429)."""
+    for attempt in range(3):
         try:
-            text = client.models.generate_content(model=model, contents=prompt).text
+            reply = client.models.generate_content(model=model, contents=prompt)
+            if reply.candidates and reply.candidates[0].finish_reason == 'MAX_TOKENS':
+                print('gemini reply hit the output limit of', model)
+            if reply.text:
+                return reply.text
         except errors.ClientError as e:
             if e.code != 429:  # bad key, unknown model - retrying won't help
                 raise HTTPException(e.code, f'Gemini: {e.message}')
             print('gemini rate limited:', e.message)
         except Exception as e:
             print('gemini failed:', e)
-        if text:
-            break
         if attempt < 2:
             time.sleep(10)
-    if not text:
-        raise HTTPException(503, 'Gemini busy or rate limited, run again in a minute')
+    raise HTTPException(503, 'Gemini busy or rate limited, run again in a minute')
 
-    # split on "FILE: name.py" lines -> [before, name, code, name, code, ...]
-    parts = re.split(r'^\W*FILE:\W*(\S+?)\W*$', text, flags=re.M)
-    result = {}
+
+def split_files(text):
+    """{name: code} from a reply made of "FILE: name.py" sections."""
+    parts = re.split(r'^\W*FILE:\W*(\S+?)\W*$', text, flags=re.M)  # [before, name, code, name, code, ...]
+    files = {}
     for name, code in zip(parts[1::2], parts[2::2]):
         lines = code.strip().splitlines()
         if lines and lines[0].startswith('```'):  # Gemini adds fences despite the prompt
@@ -69,5 +83,14 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
         if lines and lines[-1].startswith('```'):
             lines = lines[:-1]
         if name in FILES and lines:  # an empty block must not wipe the user's file
-            result[name] = '\n'.join(lines) + '\n'
-    return result
+            files[name] = '\n'.join(lines) + '\n'
+    return files
+
+
+def compiles(name, code):
+    try:
+        compile(code, name, 'exec')
+        return True
+    except SyntaxError as e:  # usually a reply cut off by the model's output limit
+        print('dropped', name, '-', e)
+        return False
