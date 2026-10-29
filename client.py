@@ -56,10 +56,11 @@ for p in DATA:
 send = {n: text for n, text in send.items() if text is not None}
 print('tests file:', TESTS, '| data files:', sum(str(p) in send for p in DATA))
 
-for round in range(3):
+for round in range(1, 4):  # stops early as soon as all tests pass
     ok, errors = run_tests()
     if ok:
         break
+    print(f'round {round}/3: asking {MODEL} to fix the failing tests...')
     for n in FILES:
         if read(n) is not None:
             send[n] = read(n)
@@ -78,8 +79,11 @@ for round in range(3):
     except (urllib.error.URLError, TimeoutError) as e:  # no network, DNS, or the server took too long
         print('could not reach server -', e, '- run the command again in a minute')
         break
+    if not result:
+        print('  no usable files in the reply this round')
     for name, code in result.items():
         Path(name).write_text(code, encoding='utf-8')
-        print('wrote', name)
+        print('  wrote', name)
 else:
-    run_tests()
+    ok, _ = run_tests()
+print('DONE - all tests pass' if ok else 'NOT DONE - some tests still fail, run the command again')
