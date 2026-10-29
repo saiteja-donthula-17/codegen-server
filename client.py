@@ -1,6 +1,9 @@
-# Served by /run and executed on the user's machine: curl -fsSL ".../run?token=..." | python3
+# Served by /run and executed on the user's machine:
+#   curl -fsSL ".../run?token=..." | GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash python3
+import os
 import sys
 import json
+import getpass
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -15,6 +18,18 @@ DATA = [p for d in ['data', '../data'] for p in sorted(Path(d).rglob('*'))
         if p.is_file() and not p.name.startswith('.')][:40]
 if not Path(TESTS).exists():
     sys.exit('tests.py not found - run this from the project folder (next to pytest/ or one level below it)')
+
+# the key stays on this machine until it is sent as a header, never in the URL
+KEY = os.getenv('GEMINI_API_KEY')
+if not KEY:
+    try:
+        KEY = getpass.getpass('Gemini API key: ').strip()  # getpass reads the terminal, not the pipe
+    except EOFError:  # no terminal to ask on
+        pass
+if not KEY:
+    sys.exit('no Gemini API key - get one at https://aistudio.google.com/apikey')
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+print('model:', MODEL)
 
 
 def read(path, limit=None):
@@ -49,11 +64,16 @@ for round in range(3):
         if read(n) is not None:
             send[n] = read(n)
     send['errors'] = errors[-8000:]
-    req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers={'Content-Type': 'application/json'})
+    headers = {'Content-Type': 'application/json', 'X-Api-Key': KEY, 'X-Model': MODEL}
+    req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers=headers)
     try:
         result = json.load(urllib.request.urlopen(req, timeout=600))
     except urllib.error.HTTPError as e:
-        print('server error', e.code, '- run the command again in a minute')
+        try:
+            detail = json.loads(e.read())['detail']
+        except (ValueError, KeyError, TypeError):  # e.g. Render's HTML page while the server wakes up
+            detail = 'run the command again in a minute'
+        print('server error', e.code, '-', detail)
         break
     for name, code in result.items():
         Path(name).write_text(code)

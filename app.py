@@ -1,12 +1,12 @@
 import os
 import time
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from google import genai
+from google.genai import errors
 
 app = FastAPI()
-client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 FILES = ['state.py', 'tools.py', 'agents.py', 'nodes.py', 'graph.py', 'main.py']
 
 
@@ -22,9 +22,15 @@ def run(token: str, request: Request):
 
 
 @app.post('/generate')
-def generate(sent: dict[str, str], token: str):
+def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_model: str = Header(None)):
     if token != os.getenv('APP_TOKEN'):
         raise HTTPException(401, 'wrong token')
+    # each user brings their own Gemini key and model; the server's env values are only a fallback
+    key = x_api_key or os.getenv('GEMINI_API_KEY')
+    model = x_model or os.getenv('GEMINI_MODEL') or 'gemini-2.5-flash'
+    if not key:
+        raise HTTPException(400, 'no Gemini API key - set GEMINI_API_KEY before running')
+    client = genai.Client(api_key=key)
 
     given = ''
     for name, content in sent.items():
@@ -38,7 +44,9 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
     text = None
     for attempt in range(3):  # Gemini is often briefly overloaded (503)
         try:
-            text = client.models.generate_content(model=os.getenv('GEMINI_MODEL'), contents=prompt).text
+            text = client.models.generate_content(model=model, contents=prompt).text
+        except errors.ClientError as e:  # bad key, unknown model, quota - retrying won't help
+            raise HTTPException(e.code, f'Gemini: {e.message}')
         except Exception as e:
             print('gemini failed:', e)
         if text:
