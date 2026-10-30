@@ -54,6 +54,7 @@ Follow README.md and .env.example if given, e.g. read settings from .env with py
 
 def ask_gemini(keys, model, prompt):
     """Gemini's reply. Each key is tried in turn; rate limits (429) and overloads (503) get a pause and a retry."""
+    last = 'empty reply'
     for attempt in range(3):
         failed, wait = None, False
         for i, key in enumerate(keys, 1):
@@ -64,16 +65,18 @@ def ask_gemini(keys, model, prompt):
                 if reply.text:
                     return reply.text
             except errors.ClientError as e:  # bad key, used-up quota, model closed to this key: try the next key
-                print(f'key {i}/{len(keys)} failed: {e.code} {e.message}', flush=True)
+                last = f'key {i}/{len(keys)}: {e.code} {e.message}'
+                print(last, flush=True)
                 failed, wait = e, wait or e.code == 429
             except Exception as e:
-                print('gemini failed:', e, flush=True)
+                last = f'key {i}/{len(keys)}: {e}'
+                print(last, flush=True)
                 wait = True
         if failed and not wait:  # every key was refused and a pause won't change that
             raise HTTPException(failed.code, f'Gemini: {failed.message}')
         if attempt < 2:
             time.sleep(10)
-    raise HTTPException(503, 'Gemini busy or rate limited, run again in a minute')
+    raise HTTPException(503, f'Gemini busy or rate limited, run again in a minute (last error: {last[:300]})')
 
 
 def split_files(text):
