@@ -41,6 +41,7 @@ def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_
     prompt = f"""Write {FILES} so all tests pass. If current code and errors are given, fix them.
 Simple code, no ``` marks. Start each file with a line: FILE: name.py
 The code runs on Python {x_python}: inside an f-string never reuse its own quote character.
+Follow README.md and .env.example if given, e.g. read settings from .env with python-dotenv.
 
 {given}"""
 

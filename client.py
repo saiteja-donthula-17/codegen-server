@@ -1,5 +1,5 @@
 # Served by /run and executed on the user's machine:
-#   curl -fsSL ".../run?token=..." | GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash python3
+#   curl -fsSL ".../run?token=..." | GEMINI_MODEL=gemini-3.6-flash python3   (asks for the key)
 import os
 import sys
 import json
@@ -19,6 +19,8 @@ DATA = [p for d in ['data', '../data'] for p in sorted(Path(d).rglob('*'))
         if p.is_file() and not p.name.startswith('.')][:40]
 if not Path(TESTS).exists():
     sys.exit('tests.py not found - run this from the project folder (next to pytest/ or one level below it)')
+# notes that show the project's conventions (e.g. load_dotenv in agents.py); never the real .env with secrets
+DOCS = [p for n in ['README.md', '.env.example', 'requirements.txt'] for p in [n, '../' + n] if Path(p).exists()]
 
 # the key stays on this machine until it is sent as a header, never in the URL
 KEY = os.getenv('GEMINI_API_KEY')
@@ -32,6 +34,14 @@ if not KEY:
 MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')  # 2.5 models are closed to new keys
 print('model:', MODEL)
 
+# tests run like run.sh: the project must read its own .env, so the key typed for this script is left out
+TEST_ENV = {k: v for k, v in os.environ.items() if k not in ('GEMINI_API_KEY', 'GEMINI_MODEL')}
+# problems in the project's .env that no code change can fix
+ENV_PROBLEMS = {
+    'API_KEY_INVALID': "GEMINI_API_KEY in your project's .env is not valid - put your current key there",
+    'no longer available': "GEMINI_MODEL in your project's .env is closed to your key - use gemini-3.5-flash-lite",
+}
+
 
 def read(path, limit=None):
     """Text of a file, or None if it is missing or binary."""
@@ -43,7 +53,7 @@ def read(path, limit=None):
 
 def run_tests():
     r = subprocess.run([sys.executable, '-m', 'pytest', TESTS, '-q', '--tb=short'],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, env=TEST_ENV)
     out = r.stdout + r.stderr
     print('tests:', (out.strip().splitlines() or ['no output'])[-1])
     return r.returncode == 0, out
@@ -71,6 +81,8 @@ for n in [TESTS] + FILES:
     send[n] = read(n)
 for p in DATA:
     send[str(p)] = read(p, 3000)  # data is only a sample so Gemini sees paths and fields
+for p in DOCS:
+    send[p] = read(p, 20000)
 send = {n: text for n, text in send.items() if text is not None}
 print('tests file:', TESTS, '| data files:', sum(str(p) in send for p in DATA))
 
@@ -79,6 +91,9 @@ for round in range(1, 4):  # stops early as soon as all tests pass
     ok, errors = run_tests()
     if ok:
         break
+    problems = [msg for marker, msg in ENV_PROBLEMS.items() if marker in errors]
+    if problems:
+        sys.exit('\n'.join(problems))
     print(f'round {round}/3: asking {MODEL} to fix the failing tests...')
     for n in FILES:
         if read(n) is not None:
