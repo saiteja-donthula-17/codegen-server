@@ -28,7 +28,7 @@ def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_
         raise HTTPException(401, 'wrong token')
     # each user brings their own Gemini key and model; the server's env values are only a fallback
     key = x_api_key or os.getenv('GEMINI_API_KEY')
-    model = x_model or os.getenv('GEMINI_MODEL') or 'gemini-2.5-flash'
+    model = x_model or os.getenv('GEMINI_MODEL') or 'gemini-3.5-flash-lite'
     if not key:
         raise HTTPException(400, 'no Gemini API key - set GEMINI_API_KEY before running')
     client = genai.Client(api_key=key)
@@ -42,14 +42,8 @@ Simple code, no ``` marks. Start each file with a line: FILE: name.py
 
 {given}"""
 
-    result = {}
-    for attempt in range(2):  # a reply cut off mid-file is asked for once more
-        files = split_files(ask_gemini(client, model, prompt))
-        good = {name: code for name, code in files.items() if compiles(name, code)}
-        result.update(good)
-        if len(good) == len(files):
-            break
-    return result  # only files that compile, so a broken reply never overwrites working code
+    # the client compiles each file with its own Python before writing it
+    return split_files(ask_gemini(client, model, prompt))
 
 
 def ask_gemini(client, model, prompt):
@@ -85,12 +79,3 @@ def split_files(text):
         if name in FILES and lines:  # an empty block must not wipe the user's file
             files[name] = '\n'.join(lines) + '\n'
     return files
-
-
-def compiles(name, code):
-    try:
-        compile(code, name, 'exec')
-        return True
-    except SyntaxError as e:  # usually a reply cut off by the model's output limit
-        print('dropped', name, '-', e)
-        return False

@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import getpass
+import threading
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -28,7 +29,7 @@ if not KEY:
         pass
 if not KEY:
     sys.exit('no Gemini API key - get one at https://aistudio.google.com/apikey')
-MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')  # 2.5 models are closed to new keys
 print('model:', MODEL)
 
 
@@ -48,6 +49,23 @@ def run_tests():
     return r.returncode == 0, out
 
 
+def post(req):
+    """Server reply, with a line every 30s so a slow model doesn't look stuck."""
+    done = threading.Event()
+
+    def tick():
+        waited = 0
+        while not done.wait(30):
+            waited += 30
+            print(f'  still waiting for {MODEL}... {waited}s', flush=True)
+
+    threading.Thread(target=tick, daemon=True).start()
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=600))
+    finally:
+        done.set()
+
+
 send = {}
 for n in [TESTS] + FILES:
     send[n] = read(n)
@@ -56,6 +74,7 @@ for p in DATA:
 send = {n: text for n, text in send.items() if text is not None}
 print('tests file:', TESTS, '| data files:', sum(str(p) in send for p in DATA))
 
+broken = ''  # syntax errors in Gemini's last reply, sent back so it can fix them
 for round in range(1, 4):  # stops early as soon as all tests pass
     ok, errors = run_tests()
     if ok:
@@ -64,11 +83,11 @@ for round in range(1, 4):  # stops early as soon as all tests pass
     for n in FILES:
         if read(n) is not None:
             send[n] = read(n)
-    send['errors'] = errors[-8000:]
+    send['errors'] = broken + errors[-8000:]
     headers = {'Content-Type': 'application/json', 'X-Api-Key': KEY, 'X-Model': MODEL}
     req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers=headers)
     try:
-        result = json.load(urllib.request.urlopen(req, timeout=600))
+        result = post(req)
     except urllib.error.HTTPError as e:
         try:
             detail = json.loads(e.read())['detail']
@@ -81,7 +100,15 @@ for round in range(1, 4):  # stops early as soon as all tests pass
         break
     if not result:
         print('  no usable files in the reply this round')
+    broken = ''
     for name, code in result.items():
+        try:
+            compile(code, name, 'exec')  # with this machine's Python, the one that runs the tests
+        except SyntaxError as e:  # keep the working file; a broken one would fail every test
+            print(f'  skipped {name} - syntax error on line {e.lineno}: {e.msg}')
+            broken += (f'Your last {name} was not used: SyntaxError on line {e.lineno}: {e.msg}: '
+                       f'{(e.text or "").strip()} (this machine runs Python {sys.version.split()[0]})\n')
+            continue
         Path(name).write_text(code, encoding='utf-8')
         print('  wrote', name)
 else:
