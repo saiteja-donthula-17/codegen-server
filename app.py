@@ -59,7 +59,8 @@ def ask_gemini(keys, model, prompt):
         failed, wait = None, False
         for i, key in enumerate(keys, 1):
             try:
-                reply = genai.Client(api_key=key).models.generate_content(model=model, contents=prompt)
+                client = genai.Client(api_key=key)  # keep a reference: a dropped Client closes its connection
+                reply = client.models.generate_content(model=model, contents=prompt)
                 if reply.candidates and reply.candidates[0].finish_reason == 'MAX_TOKENS':
                     print('gemini reply hit the output limit of', model)
                 if reply.text:
