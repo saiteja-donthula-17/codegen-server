@@ -84,7 +84,8 @@ for round in range(1, 4):  # stops early as soon as all tests pass
         if read(n) is not None:
             send[n] = read(n)
     send['errors'] = broken + errors[-8000:]
-    headers = {'Content-Type': 'application/json', 'X-Api-Key': KEY, 'X-Model': MODEL}
+    headers = {'Content-Type': 'application/json', 'X-Api-Key': KEY, 'X-Model': MODEL,
+               'X-Python': '.'.join(map(str, sys.version_info[:2]))}
     req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers=headers)
     try:
         result = post(req)

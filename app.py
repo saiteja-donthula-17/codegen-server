@@ -23,7 +23,8 @@ def run(token: str, request: Request):
 
 
 @app.post('/generate')
-def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_model: str = Header(None)):
+def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_model: str = Header(None),
+             x_python: str = Header('3.11')):
     if token != os.getenv('APP_TOKEN'):
         raise HTTPException(401, 'wrong token')
     # each user brings their own Gemini key and model; the server's env values are only a fallback
@@ -39,6 +40,7 @@ def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_
 
     prompt = f"""Write {FILES} so all tests pass. If current code and errors are given, fix them.
 Simple code, no ``` marks. Start each file with a line: FILE: name.py
+The code runs on Python {x_python}: inside an f-string never reuse its own quote character.
 
 {given}"""
 
@@ -68,7 +70,8 @@ def ask_gemini(client, model, prompt):
 
 def split_files(text):
     """{name: code} from a reply made of "FILE: name.py" sections."""
-    parts = re.split(r'^\W*FILE:\W*(\S+?)\W*$', text, flags=re.M)  # [before, name, code, name, code, ...]
+    # [^\w\n] not \W: \W also matches newlines, so the header ate a closing "}" or opening '"""' next to it
+    parts = re.split(r'^[^\w\n]*FILE:[^\w\n]*(\S+?)[^\w\n]*$', text, flags=re.M)  # [before, name, code, ...]
     files = {}
     for name, code in zip(parts[1::2], parts[2::2]):
         lines = code.strip().splitlines()
