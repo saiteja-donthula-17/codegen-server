@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import random
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -9,6 +10,9 @@ from google.genai import errors
 
 app = FastAPI()
 FILES = ['state.py', 'tools.py', 'agents.py', 'nodes.py', 'graph.py', 'main.py']
+# shared keys for users who don't bring their own: GEMINI_API_KEYS=key1,key2,... on Render
+SERVER_KEYS = [k.strip() for k in (os.getenv('GEMINI_API_KEYS') or os.getenv('GEMINI_API_KEY') or '').split(',')
+               if k.strip()]
 
 
 @app.get('/run', response_class=PlainTextResponse)
@@ -27,12 +31,11 @@ def generate(sent: dict[str, str], token: str, x_api_key: str = Header(None), x_
              x_python: str = Header('3.11')):
     if token != os.getenv('APP_TOKEN'):
         raise HTTPException(401, 'wrong token')
-    # each user brings their own Gemini key and model; the server's env values are only a fallback
-    key = x_api_key or os.getenv('GEMINI_API_KEY')
+    # a user's own key is used alone; otherwise the server's keys, in random order to spread the quota
+    keys = [x_api_key] if x_api_key else random.sample(SERVER_KEYS, len(SERVER_KEYS))
     model = x_model or os.getenv('GEMINI_MODEL') or 'gemini-3.5-flash-lite'
-    if not key:
+    if not keys:
         raise HTTPException(400, 'no Gemini API key - set GEMINI_API_KEY before running')
-    client = genai.Client(api_key=key)
 
     given = ''
     for name, content in sent.items():
@@ -46,24 +49,28 @@ Follow README.md and .env.example if given, e.g. read settings from .env with py
 {given}"""
 
     # the client compiles each file with its own Python before writing it
-    return split_files(ask_gemini(client, model, prompt))
+    return split_files(ask_gemini(keys, model, prompt))
 
 
-def ask_gemini(client, model, prompt):
-    """Gemini's reply, retrying when it is briefly overloaded (503) or rate limited (429)."""
+def ask_gemini(keys, model, prompt):
+    """Gemini's reply. Each key is tried in turn; rate limits (429) and overloads (503) get a pause and a retry."""
     for attempt in range(3):
-        try:
-            reply = client.models.generate_content(model=model, contents=prompt)
-            if reply.candidates and reply.candidates[0].finish_reason == 'MAX_TOKENS':
-                print('gemini reply hit the output limit of', model)
-            if reply.text:
-                return reply.text
-        except errors.ClientError as e:
-            if e.code != 429:  # bad key, unknown model - retrying won't help
-                raise HTTPException(e.code, f'Gemini: {e.message}')
-            print('gemini rate limited:', e.message)
-        except Exception as e:
-            print('gemini failed:', e)
+        failed, wait = None, False
+        for i, key in enumerate(keys, 1):
+            try:
+                reply = genai.Client(api_key=key).models.generate_content(model=model, contents=prompt)
+                if reply.candidates and reply.candidates[0].finish_reason == 'MAX_TOKENS':
+                    print('gemini reply hit the output limit of', model)
+                if reply.text:
+                    return reply.text
+            except errors.ClientError as e:  # bad key, used-up quota, model closed to this key: try the next key
+                print(f'key {i}/{len(keys)} failed: {e.code} {e.message}', flush=True)
+                failed, wait = e, wait or e.code == 429
+            except Exception as e:
+                print('gemini failed:', e, flush=True)
+                wait = True
+        if failed and not wait:  # every key was refused and a pause won't change that
+            raise HTTPException(failed.code, f'Gemini: {failed.message}')
         if attempt < 2:
             time.sleep(10)
     raise HTTPException(503, 'Gemini busy or rate limited, run again in a minute')

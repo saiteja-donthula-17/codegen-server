@@ -1,5 +1,6 @@
 # Served by /run and executed on the user's machine:
-#   curl -fsSL ".../run?token=..." | GEMINI_MODEL=gemini-3.6-flash python3   (asks for the key)
+#   curl -fsSL ".../run?token=..." | python3                                  (server's keys and model)
+#   curl -fsSL ".../run?token=..." | GEMINI_MODEL=gemini-3.6-flash python3   (pick the model)
 import os
 import sys
 import json
@@ -22,17 +23,15 @@ if not Path(TESTS).exists():
 # notes that show the project's conventions (e.g. load_dotenv in agents.py); never the real .env with secrets
 DOCS = [p for n in ['README.md', '.env.example', 'requirements.txt'] for p in [n, '../' + n] if Path(p).exists()]
 
-# the key stays on this machine until it is sent as a header, never in the URL
+# the key stays on this machine until it is sent as a header, never in the URL; no key = the server's keys
 KEY = os.getenv('GEMINI_API_KEY')
 if not KEY:
     try:
-        KEY = getpass.getpass('Gemini API key: ').strip()  # getpass reads the terminal, not the pipe
+        KEY = getpass.getpass("Gemini API key (Enter = use the server's keys): ").strip()  # reads the terminal
     except EOFError:  # no terminal to ask on
         pass
-if not KEY:
-    sys.exit('no Gemini API key - get one at https://aistudio.google.com/apikey')
-MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')  # 2.5 models are closed to new keys
-print('model:', MODEL)
+MODEL = os.getenv('GEMINI_MODEL')  # none = the server's default
+print('key:', 'yours' if KEY else "the server's", '| model:', MODEL or "the server's default")
 
 # tests run like run.sh: the project must read its own .env, so the key typed for this script is left out
 TEST_ENV = {k: v for k, v in os.environ.items() if k not in ('GEMINI_API_KEY', 'GEMINI_MODEL')}
@@ -67,7 +66,7 @@ def post(req):
         waited = 0
         while not done.wait(30):
             waited += 30
-            print(f'  still waiting for {MODEL}... {waited}s', flush=True)
+            print(f'  still waiting for {MODEL or "Gemini"}... {waited}s', flush=True)
 
     threading.Thread(target=tick, daemon=True).start()
     try:
@@ -94,13 +93,16 @@ for round in range(1, 4):  # stops early as soon as all tests pass
     problems = [msg for marker, msg in ENV_PROBLEMS.items() if marker in errors]
     if problems:
         sys.exit('\n'.join(problems))
-    print(f'round {round}/3: asking {MODEL} to fix the failing tests...')
+    print(f'round {round}/3: asking {MODEL or "Gemini"} to fix the failing tests...')
     for n in FILES:
         if read(n) is not None:
             send[n] = read(n)
     send['errors'] = broken + errors[-8000:]
-    headers = {'Content-Type': 'application/json', 'X-Api-Key': KEY, 'X-Model': MODEL,
-               'X-Python': '.'.join(map(str, sys.version_info[:2]))}
+    headers = {'Content-Type': 'application/json', 'X-Python': '.'.join(map(str, sys.version_info[:2]))}
+    if KEY:
+        headers['X-Api-Key'] = KEY
+    if MODEL:
+        headers['X-Model'] = MODEL
     req = urllib.request.Request(URL, data=json.dumps(send).encode(), headers=headers)
     try:
         result = post(req)
